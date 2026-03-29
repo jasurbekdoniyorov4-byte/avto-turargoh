@@ -1,0 +1,15 @@
+{
+  "name": "Smart Parking Tashkent",
+  "short_name": "Parking TKT",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#1e3799",
+  "icons": [
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/2990/2990810.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
