@@ -3,7 +3,9 @@ from flask import Flask, jsonify, render_template_string, send_from_directory
 import requests
 import random
 from datetime import datetime
+
 app = Flask(__name__)
+
 def fetch_parking_data():
     overpass_url = "http://overpass-api.de/api/interpreter"
     overpass_query = """[out:json][timeout:30];
@@ -40,24 +42,29 @@ def fetch_parking_data():
                     else: name = "Bino oldi (Yo'l yuzi)"
                 else:
                     name = "Yo'l yuzi parkovkasi"
+            
             if 9 <= current_hour <= 18:
                 prob = random.randint(10, 45)
             else:
                 prob = random.randint(60, 95)
+            
             points.append({
                 "name": name,
                 "lat": lat,
-"lng": lng,
-"type": "parking_lot" if is_lot else "street_parking",
-"price": "10,000 so'm/soat" if is_lot else "Bepul (Ko'cha yuzi)",
-"probability": f"{prob}%"})
-return points[:10000]
-except Exception as e:
-print("Xatolik:", e)
-return []
+                "lng": lng,
+                "type": "parking_lot" if is_lot else "street_parking",
+                "price": "10,000 so'm/soat" if is_lot else "Bepul (Ko'cha yuzi)",
+                "probability": f"{prob}%"
+            })
+        return points[:10000]
+    except Exception as e:
+        print("Xatolik:", e)
+        return []
+
 @app.route('/manifest.json')
 def manifest():
-return send_from_directory('.', 'manifest.json')
+    return send_from_directory('.', 'manifest.json')
+
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="uz">
@@ -102,7 +109,6 @@ HTML_TEMPLATE = """
         .price-tag { color: #334155; font-weight: 600; }
         .radius-info { font-size: 12px; color: #ef4444; font-weight: 600; margin-top: 5px; display: none; }
         
-        /* Telefonda chiroyli ko'rinishi uchun */
         @media (max-width: 768px) {
             body { flex-direction: column-reverse; }
             #sidebar { width: 100%; height: 45%; border-right: none; border-top: 1px solid #e2e8f0; }
@@ -189,7 +195,7 @@ HTML_TEMPLATE = """
                 const probColor = probVal > 70 ? '#10b981' : (probVal > 30 ? '#f59e0b' : '#ef4444');
 
                 card.innerHTML = `
-                    <span class="type-badge ${isLot ? 'lot-badge' : 'street-badge'}">${isLot ? 'Maxsus turargoh' : 'Yo\\'l yuzi'}</span>
+                    <span class="type-badge ${isLot ? 'lot-badge' : 'street-badge'}">${isLot ? 'Maxsus turargoh' : "Yo'l yuzi"}</span>
                     <div style="font-weight:700; color:#1e293b; font-size:16px;">${p.name}</div>
                     <div class="info-row">
                         <span class="price-tag">${p.price}</span>
@@ -262,7 +268,6 @@ HTML_TEMPLATE = """
             }
         });
 
-        // PWA SERVICE WORKER REGISTRATION (Brauzer ilova ekanligini bilishi uchun)
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', function() {
                 navigator.serviceWorker.register('data:text/javascript;base64,c2VsZi5hZGRFdmVudExpc3RlbmVyKCdmZXRjaCcsIGZ1bmN0aW9uKGV2ZW50KSB7fSk7');
@@ -272,11 +277,14 @@ HTML_TEMPLATE = """
 </body>
 </html>
 """
+
 @app.route('/')
 def index():
-return render_template_string(HTML_TEMPLATE)
+    return render_template_string(HTML_TEMPLATE)
+
 @app.route('/api/data')
 def get_data():
-return jsonify(fetch_parking_data())
+    return jsonify(fetch_parking_data())
+
 if __name__ == '__main__':
-app.run(debug=True, port=5000)
+    app.run(debug=True, port=5000)
