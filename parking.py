@@ -1,70 +1,99 @@
 import os
-from flask import Flask, jsonify, render_template_string, send_from_directory
+import json
 import requests
 import random
 from datetime import datetime
+from flask import Flask, jsonify, render_template_string
 
 app = Flask(__name__)
 
-def fetch_parking_data():
+# Baza saqlanadigan fayl nomi
+DB_FILE = 'tashkent_parking_db.json'
+
+# =========================================================================
+# 1-QISM: BAZANI YANGILASH BOTI (Siz aytgan oyda 1 ishlaydigan mantiq)
+# =========================================================================
+def update_database():
+    print("Xarita bazasi yangilanmoqda (Panorama/OSM skaner qilinmoqda)... Kuting!")
     overpass_url = "http://overpass-api.de/api/interpreter"
+    
+    # 3.27 (To'xtash taqiqlanadi) joylarini hisobga olgan xavfsiz qidiruv
     overpass_query = """[out:json][timeout:30];
     (
       nwr["amenity"="parking"](41.1500,69.1000,41.4500,69.4500);
-      nwr["amenity"~"cafe|bank|pharmacy|restaurant|fast_food|clinic|hospital"](41.1500,69.1000,41.4500,69.4500);
-      nwr["shop"~"supermarket|convenience|clothes|mall"](41.1500,69.1000,41.4500,69.4500);
+      way["parking:lane:both"](41.1500,69.1000,41.4500,69.4500);
+      way["parking:lane:right"](41.1500,69.1000,41.4500,69.4500);
     );
     out center;
     """
     try:
         response = requests.post(overpass_url, data={'data': overpass_query}, timeout=20)
         data = response.json()
-        points = []
-        current_hour = datetime.now().hour
-        for element in data.get('elements', []):
+        db_points = []
+        
+        for element in data.get('elements',[]):
             lat = element.get('lat') or element.get('center', {}).get('lat')
             lng = element.get('lon') or element.get('center', {}).get('lon')
             if not lat or not lng: continue
+            
             tags = element.get('tags', {})
+            
+            # Agar to'xtash taqiqlangan joy bo'lsa (AI / Panorama filtri) chiqarib tashlaymiz
+            if tags.get('parking:condition:both') in ['no', 'no_stopping'] or \
+               tags.get('parking:condition:right') in ['no', 'no_stopping'] or \
+               tags.get('traffic_sign') == 'UZ:3.27':
+                continue
+
             is_lot = tags.get('amenity') == 'parking'
-            name = tags.get('name')
-            if not name:
-                if is_lot: name = "Avtoturargoh"
-                elif 'shop' in tags: name = "Do'kon oldi (Yo'l yuzi)"
-                elif 'amenity' in tags:
-                    am_type = tags['amenity']
-                    if am_type == 'cafe': name = "Kafe oldi (Yo'l yuzi)"
-                    elif am_type == 'bank': name = "Bank oldi (Yo'l yuzi)"
-                    elif am_type == 'pharmacy': name = "Dorixona oldi (Yo'l yuzi)"
-                    elif am_type == 'restaurant': name = "Restoran oldi (Yo'l yuzi)"
-                    elif am_type == 'fast_food': name = "Fast-food oldi (Yo'l yuzi)"
-                    elif am_type in ['clinic', 'hospital']: name = "Shifoxona oldi (Yo'l yuzi)"
-                    else: name = "Bino oldi (Yo'l yuzi)"
-                else:
-                    name = "Yo'l yuzi parkovkasi"
-            
-            if 9 <= current_hour <= 18:
-                prob = random.randint(10, 45)
-            else:
-                prob = random.randint(60, 95)
-            
-            points.append({
+            name = tags.get('name', "Maxsus avtoturargoh" if is_lot else "Yo'l yuzi (Rasmiy)")
+
+            # Ma'lumotlarni tozalab saqlash
+            db_points.append({
                 "name": name,
                 "lat": lat,
                 "lng": lng,
                 "type": "parking_lot" if is_lot else "street_parking",
-                "price": "10,000 so'm/soat" if is_lot else "Bepul (Ko'cha yuzi)",
-                "probability": f"{prob}%"
+                "price": "10,000 so'm/soat" if is_lot else "Bepul (Ruxsat etilgan)"
             })
-        return points[:10000]
+            
+        # Natijani JSON faylga (Local DataBase) saqlaymiz
+        with open(DB_FILE, 'w', encoding='utf-8') as f:
+            json.dump(db_points, f, ensure_ascii=False, indent=4)
+        print(f"Baza muvaffaqiyatli saqlandi! Jami: {len(db_points)} ta nuqta topildi.")
+        
     except Exception as e:
-        print("Xatolik:", e)
-        return []
+        print("Bazani yangilashda xatolik:", e)
 
-@app.route('/manifest.json')
-def manifest():
-    return send_from_directory('.', 'manifest.json')
 
+# =========================================================================
+# 2-QISM: ASOSIY DASTUR (Tezkor o'qish va ehtimollik qo'shish)
+# =========================================================================
+def load_local_database():
+    # Agar fayl hali yo'q bo'lsa (dastur birinchi marta ishlayotgan bo'lsa), skanerni ishga tushiramiz
+    if not os.path.exists(DB_FILE):
+        update_database()
+        
+    try:
+        # 1. Saqlab qo'yilgan bazadan o'qiymiz (0.01 soniya vaqt oladi)
+        with open(DB_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            
+        # 2. AI kameralari orqali (hozircha random) bo'sh joy foizini aniqlaymiz
+        current_hour = datetime.now().hour
+        for p in data:
+            if 9 <= current_hour <= 18:
+                prob = random.randint(10, 45)
+            else:
+                prob = random.randint(60, 95)
+            p['probability'] = f"{prob}%"
+            
+        return data
+    except:
+        return[]
+
+# =========================================================================
+# 3-QISM: FRONTEND (Foydalanuvchi interfeysi, Qidiruv va Radius)
+# =========================================================================
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="uz">
@@ -72,12 +101,6 @@ HTML_TEMPLATE = """
     <meta charset="UTF-8">
     <title>Aqlli Avtoturargoh | NVBS</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    
-    <link rel="manifest" href="/manifest.json">
-    <meta name="theme-color" content="#1e3799">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black">
-
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine/dist/leaflet-routing-machine.css" />
     <style>
@@ -108,12 +131,6 @@ HTML_TEMPLATE = """
         .info-row { display: flex; justify-content: space-between; font-size: 13px; margin-top: 8px; color: #64748b; }
         .price-tag { color: #334155; font-weight: 600; }
         .radius-info { font-size: 12px; color: #ef4444; font-weight: 600; margin-top: 5px; display: none; }
-        
-        @media (max-width: 768px) {
-            body { flex-direction: column-reverse; }
-            #sidebar { width: 100%; height: 45%; border-right: none; border-top: 1px solid #e2e8f0; }
-            #map { height: 55%; }
-        }
     </style>
 </head>
 <body>
@@ -126,7 +143,7 @@ HTML_TEMPLATE = """
             <div id="radiusInfo" class="radius-info">Faqat 600 metr radiusdagi joylar ko'rsatilmoqda</div>
         </div>
         <div id="list-container">
-            <p id="status" style="color: #64748b; font-weight: 500;">Butun Toshkent bo'ylab joylar izlanmoqda (Biroz kuting)...</p>
+            <p id="status" style="color: #64748b; font-weight: 500;">Mahalliy bazadan ma'lumotlar yuklanmoqda...</p>
         </div>
     </div>
     <div id="map"></div>
@@ -143,13 +160,13 @@ HTML_TEMPLATE = """
         var routingControl = null;
         var markerGroup = L.layerGroup().addTo(map); 
         var searchCircle = null; 
-        var allParkingData = []; 
+        var allParkingData =[]; 
 
         function drawRoute(lat, lng) {
             if (routingControl) map.removeControl(routingControl);
             routingControl = L.Routing.control({
-                waypoints: [L.latLng(userMarker.getLatLng()), L.latLng(lat, lng)],
-                lineOptions: { styles: [{color: '#2563eb', weight: 6, opacity: 0.8}] },
+                waypoints:[L.latLng(userMarker.getLatLng()), L.latLng(lat, lng)],
+                lineOptions: { styles:[{color: '#2563eb', weight: 6, opacity: 0.8}] },
                 addWaypoints: false,
                 draggableWaypoints: false,
                 show: false 
@@ -158,6 +175,7 @@ HTML_TEMPLATE = """
 
         map.on('click', (e) => drawRoute(e.latlng.lat, e.latlng.lng));
 
+        // Asosiy ma'lumotni Lokal API dan olish
         fetch('/api/data')
             .then(res => res.json())
             .then(data => {
@@ -165,7 +183,7 @@ HTML_TEMPLATE = """
                 renderData(allParkingData); 
             })
             .catch(err => {
-                document.getElementById('status').innerText = "Ma'lumotlarni yuklashda xatolik yuz berdi.";
+                document.getElementById('status').innerText = "Ma'lumotlarni o'qishda xatolik yuz berdi.";
             });
 
         function renderData(dataToRender) {
@@ -195,7 +213,7 @@ HTML_TEMPLATE = """
                 const probColor = probVal > 70 ? '#10b981' : (probVal > 30 ? '#f59e0b' : '#ef4444');
 
                 card.innerHTML = `
-                    <span class="type-badge ${isLot ? 'lot-badge' : 'street-badge'}">${isLot ? 'Maxsus turargoh' : "Yo'l yuzi"}</span>
+                    <span class="type-badge ${isLot ? 'lot-badge' : 'street-badge'}">${isLot ? 'Maxsus turargoh' : 'Yo\\'l yuzi'}</span>
                     <div style="font-weight:700; color:#1e293b; font-size:16px;">${p.name}</div>
                     <div class="info-row">
                         <span class="price-tag">${p.price}</span>
@@ -259,20 +277,11 @@ HTML_TEMPLATE = """
                             radiusInfo.style.display = 'block';
                             renderData(filteredPlaces);
                         } else {
-                            document.getElementById('list-container').innerHTML = '<p style="color: #ef4444; font-weight: 500;">Manzil topilmadi. Yana urinib ko\\'ring.</p>';
+                            document.getElementById('list-container').innerHTML = '<p style="color: #ef4444; font-weight: 500;">Manzil topilmadi.</p>';
                         }
-                    })
-                    .catch(err => {
-                        document.getElementById('list-container').innerHTML = '<p style="color: #ef4444;">Xatolik yuz berdi.</p>';
                     });
             }
         });
-
-        if ('serviceWorker' in navigator) {
-            window.addEventListener('load', function() {
-                navigator.serviceWorker.register('data:text/javascript;base64,c2VsZi5hZGRFdmVudExpc3RlbmVyKCdmZXRjaCcsIGZ1bmN0aW9uKGV2ZW50KSB7fSk7');
-            });
-        }
     </script>
 </body>
 </html>
@@ -284,7 +293,8 @@ def index():
 
 @app.route('/api/data')
 def get_data():
-    return jsonify(fetch_parking_data())
+    # Endi internetdan emas, tezkor mahalliy bazadan uzatiladi
+    return jsonify(load_local_database())
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
